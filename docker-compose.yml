@@ -1,0 +1,191 @@
+services:
+  sqldatabase:
+    image: mariadb:11
+    container_name: sqldatabase
+    restart: unless-stopped
+    networks:
+      - backend-net
+      - admin-net
+    volumes:
+      - mariadb-data:/var/lib/mysql
+      - ./sql/init:/docker-entrypoint-initdb.d:ro
+    environment:
+      - MARIADB_DATABASE=myrames-prod-db
+      - MARIADB_USER=mariaUsr
+      - MARIADB_PASSWORD=mariaPwd
+      - MARIADB_ROOT_PASSWORD=rootPwdChangeMe
+    healthcheck:
+      test: ["CMD-SHELL", "mariadb-admin ping -h localhost -u root -p$MARIADB_ROOT_PASSWORD"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  nosqldatabase:
+    image: mongo:6
+    container_name: nosqldatabase
+    restart: unless-stopped
+    networks:
+      - backend-net
+      - admin-net
+    volumes:
+      - mongo-data:/data/db
+    environment:
+      - MONGO_INITDB_ROOT_USERNAME=mongoUsr
+      - MONGO_INITDB_ROOT_PASSWORD=mongoPass
+      - MONGO_INITDB_DATABASE=history-db
+    healthcheck:
+      test: ["CMD", "mongosh", "--quiet", "127.0.0.1/history-db", "--eval", "db.runCommand({ ping: 1 })"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  broker:
+    image: rabbitmq:3.12-management
+    container_name: broker
+    restart: unless-stopped
+    networks:
+      - broker-net
+    environment:
+      - RABBITMQ_DEFAULT_USER=brokerusr
+      - RABBITMQ_DEFAULT_PASS=brokerpass
+    command: >
+      sh -c "rabbitmq-plugins enable --offline rabbitmq_stomp rabbitmq_web_stomp && rabbitmq-server"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "check_running"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+    ports:
+      - "15672:15672"  # interface web admin (facultatif)
+      - "61613:61613"  # port STOMP
+
+  restapi:
+    build:
+      context: ./RESTApi
+    container_name: restapi
+    restart: unless-stopped
+    networks:
+      - backend-net
+    depends_on:
+      sqldatabase:
+        condition: service_healthy
+      nosqldatabase:
+        condition: service_healthy
+    command: sh ./start-server.sh
+    ports:
+      - "5001:5001"
+    healthcheck:
+      test: ["CMD-SHELL", "python -c 'import socket; s=socket.socket(); s.settimeout(2); s.connect((\"localhost\", 5001))' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  wsapi:
+    image: maven:3.9.9-eclipse-temurin-21
+    container_name: wsapi
+    working_dir: /usr/src/app
+    restart: unless-stopped
+    depends_on:
+      sqldatabase:
+        condition: service_healthy
+      nosqldatabase:
+        condition: service_healthy
+      broker:
+        condition: service_healthy
+    networks:
+      - backend-net
+      - broker-net
+      - front-net
+    volumes:
+      - ./RealtimeApi:/usr/src/app
+      - maven-cache:/root/.m2
+      - wsapi-target:/usr/src/app/target
+    command: >
+      mvn spring-boot:run
+        -Dspring-boot.run.arguments=--spring.config.location=/usr/src/app/src/main/resources/application.properties
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8080' || exit 1"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  front:
+    image: nginx:alpine
+    container_name: front
+    restart: unless-stopped
+    depends_on:
+      restapi:
+        condition: service_healthy
+      wsapi:
+        condition: service_started
+    networks:
+      - front-net
+      - backend-net
+    ports:
+      - "80:80"
+    volumes:
+      - ./vendorConfigurations/nginx.conf:/etc/nginx/nginx.conf:ro
+      - webapp-build:/var/www/app:ro
+    healthcheck:
+      test: ["CMD", "wget", "--spider", "-q", "http://localhost/health"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+  webapp:
+    image: node:22
+    container_name: webapp
+    working_dir: /usr/src/app
+    profiles: ["build-webapp"]
+    networks:
+      - front-net
+    volumes:
+      - ./app:/usr/src/app
+      - webapp-build:/usr/src/app/build
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=4096 # Autorise Node à utiliser jusqu’à 4 Go de RAM (ca évite le crash 137 pendant la compilation Webpack)
+    command: >
+      sh -c "npm install && npm run build"
+
+  phpmyadmin:
+    image: phpmyadmin:latest
+    container_name: phpmyadmin
+    profiles: ["dev-tool"]
+    restart: unless-stopped
+    networks:
+      - admin-net
+    environment:
+      - PMA_HOST=sqldatabase
+    ports:
+      - "8081:80"
+
+  mongo-express:
+    image: mongo-express:latest
+    container_name: mongo-express
+    profiles: ["dev-tool"]
+    restart: unless-stopped
+    networks:
+      - admin-net
+    environment:
+      - ME_CONFIG_MONGODB_SERVER=nosqldatabase
+      - ME_CONFIG_MONGODB_ADMINUSERNAME=mongoUsr
+      - ME_CONFIG_MONGODB_ADMINPASSWORD=mongoPass
+    ports:
+      - "8082:8081"
+
+networks:
+  backend-net:
+    driver: bridge
+  broker-net:
+    driver: bridge
+  front-net:
+    driver: bridge
+  admin-net:
+    driver: bridge
+
+volumes:
+  mariadb-data:
+  mongo-data:
+  maven-cache:
+  wsapi-target:
+  webapp-build:

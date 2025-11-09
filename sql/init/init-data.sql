@@ -1,0 +1,10 @@
+INSERT INTO voie (num_voie, interdite) VALUES (1, false);
+INSERT INTO voie (num_voie, interdite) VALUES (2, false);
+INSERT INTO voie (num_voie, interdite) VALUES (3, false);
+INSERT INTO voie (num_voie, interdite) VALUES (4, false);
+INSERT INTO voie (num_voie, interdite) VALUES (5, false);
+INSERT INTO voie (num_voie, interdite) VALUES (6, false);
+INSERT INTO voie (num_voie, interdite) VALUES (7, false);
+INSERT INTO voie (num_voie, interdite) VALUES (8, false);
+INSERT INTO voie (num_voie, interdite) VALUES (9, false);
+INSERT INTO voie (num_voie, interdite) VALUES (10, false);
