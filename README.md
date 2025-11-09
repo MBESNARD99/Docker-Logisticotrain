@@ -19,7 +19,7 @@ Le but est de disposer d’un environnement complet, reproductible et isolé pou
 
 2. Déploiement
 Étape 1 : Cloner le projet
-git clone https://github.com/<votre-compte>/logisticotrain-deploy.git
+git clone https://github.com/MBESNARD99/Docker-Logisticotrain.git
 cd logisticotrain-deploy
 
 Étape 2 : Construire le frontend

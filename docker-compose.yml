@@ -12,13 +12,16 @@ services:
     environment:
       - MARIADB_DATABASE=myrames-prod-db
       - MARIADB_USER=mariaUsr
-      - MARIADB_PASSWORD=mariaPwd
-      - MARIADB_ROOT_PASSWORD=rootPwdChangeMe
+      - MARIADB_PASSWORD_FILE=/run/secrets/mariadb_user_password
+      - MARIADB_ROOT_PASSWORD_FILE=/run/secrets/mariadb_root_password
     healthcheck:
-      test: ["CMD-SHELL", "mariadb-admin ping -h localhost -u root -p$MARIADB_ROOT_PASSWORD"]
+      test: ["CMD-SHELL", "mariadb-admin ping -h localhost -u root -p$$(cat /run/secrets/mariadb_root_password)"]
       interval: 10s
       timeout: 10s
       retries: 10
+    secrets:
+      - mariadb_user_password
+      - mariadb_root_password
 
   nosqldatabase:
     image: mongo:6
@@ -31,13 +34,15 @@ services:
       - mongo-data:/data/db
     environment:
       - MONGO_INITDB_ROOT_USERNAME=mongoUsr
-      - MONGO_INITDB_ROOT_PASSWORD=mongoPass
+      - MONGO_INITDB_ROOT_PASSWORD_FILE=/run/secrets/mongo_root_password
       - MONGO_INITDB_DATABASE=history-db
     healthcheck:
       test: ["CMD", "mongosh", "--quiet", "127.0.0.1/history-db", "--eval", "db.runCommand({ ping: 1 })"]
       interval: 10s
       timeout: 10s
       retries: 10
+    secrets:
+      - mongo_root_password
 
   broker:
     image: rabbitmq:3.12-management
@@ -47,16 +52,19 @@ services:
       - broker-net
     environment:
       - RABBITMQ_DEFAULT_USER=brokerusr
-      - RABBITMQ_DEFAULT_PASS=brokerpass
+      - RABBITMQ_DEFAULT_PASS=${RABBITMQ_PASSWORD:-brokerpass}
     command: >
-      sh -c "rabbitmq-plugins enable --offline rabbitmq_stomp rabbitmq_web_stomp && rabbitmq-server"
+      sh -c "rabbitmq-plugins enable --offline rabbitmq_stomp rabbitmq_web_stomp &&
+             rabbitmq-server"
+    secrets:
+      - rabbitmq_password
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "check_running"]
       interval: 10s
       timeout: 10s
       retries: 10
     ports:
-      - "15672:15672"  # interface web admin (facultatif)
+      - "15672:15672"  # interface web admin
       - "61613:61613"  # port STOMP
 
   restapi:
@@ -71,6 +79,9 @@ services:
         condition: service_healthy
       nosqldatabase:
         condition: service_healthy
+    environment:
+      - MARIADB_PASSWORD_FILE=/run/secrets/mariadb_user_password
+      - MONGODB_PASSWORD_FILE=/run/secrets/mongo_root_password
     command: sh ./start-server.sh
     ports:
       - "5001:5001"
@@ -79,6 +90,9 @@ services:
       interval: 10s
       timeout: 10s
       retries: 10
+    secrets:
+      - mariadb_user_password
+      - mongo_root_password
 
   wsapi:
     image: maven:3.9.9-eclipse-temurin-21
@@ -104,10 +118,10 @@ services:
       mvn spring-boot:run
         -Dspring-boot.run.arguments=--spring.config.location=/usr/src/app/src/main/resources/application.properties
     healthcheck:
-      test: ["CMD-SHELL", "bash -c '</dev/tcp/localhost/8080' || exit 1"]
-      interval: 10s
+      test: ["CMD-SHELL", "curl -f http://localhost:8080/actuator/health || exit 0"]
+      interval: 15s
       timeout: 10s
-      retries: 10
+      retries: 5
 
   front:
     image: nginx:alpine
@@ -132,21 +146,6 @@ services:
       timeout: 10s
       retries: 10
 
-  webapp:
-    image: node:22
-    container_name: webapp
-    working_dir: /usr/src/app
-    profiles: ["build-webapp"]
-    networks:
-      - front-net
-    volumes:
-      - ./app:/usr/src/app
-      - webapp-build:/usr/src/app/build
-    environment:
-      - NODE_OPTIONS=--max-old-space-size=4096 # Autorise Node à utiliser jusqu’à 4 Go de RAM (ca évite le crash 137 pendant la compilation Webpack)
-    command: >
-      sh -c "npm install && npm run build"
-
   phpmyadmin:
     image: phpmyadmin:latest
     container_name: phpmyadmin
@@ -169,9 +168,11 @@ services:
     environment:
       - ME_CONFIG_MONGODB_SERVER=nosqldatabase
       - ME_CONFIG_MONGODB_ADMINUSERNAME=mongoUsr
-      - ME_CONFIG_MONGODB_ADMINPASSWORD=mongoPass
+      - ME_CONFIG_MONGODB_ADMINPASSWORD_FILE=/run/secrets/mongo_root_password
     ports:
       - "8082:8081"
+    secrets:
+      - mongo_root_password
 
 networks:
   backend-net:
@@ -189,3 +190,13 @@ volumes:
   maven-cache:
   wsapi-target:
   webapp-build:
+
+secrets:
+  mariadb_user_password:
+    file: ./secrets/mariadb_user_password.txt
+  mariadb_root_password:
+    file: ./secrets/mariadb_root_password.txt
+  mongo_root_password:
+    file: ./secrets/mongo_root_password.txt
+  rabbitmq_password:
+    file: ./secrets/rabbitmq_password.txt
