@@ -146,6 +146,21 @@ services:
       timeout: 10s
       retries: 10
 
+  webapp:
+    image: node:22
+    container_name: webapp
+    working_dir: /usr/src/app
+    profiles: ["build-webapp"]
+    networks:
+      - front-net
+    volumes:
+      - ./app:/usr/src/app
+      - webapp-build:/usr/src/app/build
+    environment:
+      - NODE_OPTIONS=--max-old-space-size=4096 # Autorise Node à utiliser jusqu’à 4 Go de RAM (ca évite le crash 137 pendant la compilation Webpack)
+    command: >
+      sh -c "npm install && npm run build"
+
   phpmyadmin:
     image: phpmyadmin:latest
     container_name: phpmyadmin
